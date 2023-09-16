@@ -1,0 +1,31 @@
+name: 'Check Version Category Label'
+description: 'Check that the current PR has a properly formatted version category label'
+
+inputs:
+  token:
+    description: Personal access token (PAT) used to access the repository.
+    default: ${{ github.token }}
+  pr_number:
+    description: Pull Request associated with run.
+    default: ${{ github.event.number }}
+
+outputs:
+  category:
+    description: 'The version category specified by the label, valid options [major, minor, patch, none]'
+
+runs:
+  using: 'composite'
+  steps:
+    - run: |
+        # Check if the .git directory exists (indicating the repo has been checked out)
+        if [ ! -d ".git" ]; then
+          echo "::error::Repository has not been checked out. Please ensure 'actions/checkout' is included in the workflow."
+          exit 1
+        fi
+      shell: bash
+    - run: ${{ github.action_path }}/../check_version_category_label.sh
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+      shell: bash
+      id: version-category

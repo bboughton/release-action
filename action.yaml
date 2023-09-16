@@ -1,0 +1,90 @@
+name: 'Release'
+description: 'Create releases when Pull Requests are merged.'
+
+inputs:
+  token:
+    description: Personal access token (PAT) used to access the repository.
+    default: ${{ github.token }}
+  pr_number:
+    description: Pull Request associated with run.
+    default: ${{ github.event.number }}
+  monorepo:
+    description: >
+      Set to true when multiple releases are needed. This is useful in a
+      mono-repository where multiple artifacts are produced and released
+      independently. Release versions and git tags will have a namespace prefix
+      in order to clearly identify which module or subcomponent the release is
+      associated with. For example if the release is related to the 'foo'
+      component the release would be 'foo/v0.1.0'. The name of the module will
+      be determined using labels on the pull-request. See
+      'namespace_label_prefix' for more details.
+    default: false
+  module_label_prefix:
+    description: >
+      Configure the prefix of the label used to identify which module(s) a
+      pull-request is associated with. During the release process labels that
+      begin with this value will be retrieved from the pull-request and for
+      each one a release will be created. The release version will be prepended
+      with the module name minus the namespace prefix. For example if a
+      pull-request contains the label 'module/a' than the release be
+      'a/v0.1.0'.
+    default: module/
+
+outputs:
+  tag:
+    description: 'Release tag'
+
+runs:
+  using: 'composite'
+  steps:
+    - run: |
+        # Check if the .git directory exists (indicating the repo has been checked out)
+        if [ ! -d ".git" ]; then
+          echo "::error::Repository has not been checked out. Please ensure 'actions/checkout' is included in the workflow."
+          exit 1
+        fi
+      shell: bash
+    - run: |
+        # Check if tags have been retrieved
+        if [ -z "$(git tag)" ]; then
+          echo "::warning::No tags found. Please ensure 'actions/checkout' is run with fetch-depth set to 0 to retrieve all tags."
+        fi
+      shell: bash
+    - run: ${{ github.action_path }}/check_version_category_label.sh
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        GH_TOKEN: ${{ inputs.token }}
+      shell: bash
+      id: version-category
+    - name: release
+      shell: bash
+      id: release
+      if: steps.version-category.outputs.category != 'none' && inputs.monorepo == 'false'
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+      run: ${{ github.action_path }}/release.sh "${{ steps.version-category.outputs.category }}"
+    - name: release
+      shell: bash
+      id: release-multiple
+      if: steps.version-category.outputs.category != 'none' && inputs.monorepo == 'true'
+      env:
+        VERSION_CATEGORY: ${{ steps.version-category.outputs.category }}
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        MODULE_LABEL_PREFIX: ${{ inputs.module_label_prefix }}
+      run: |
+        set -e
+        set -E
+
+        labels=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[] | .name')
+        modules=$(echo "$labels" | grep -Ee "^$MODULE_LABEL_PREFIX" | sed -e "s|$MODULE_LABEL_PREFIX||" || echo -n "")
+
+        if [ -z "$modules" ]; then
+          echo "::notice::No modules have been changed in this Pull Request. Skipping release."
+          exit 0
+        fi
+
+        for module in $modules; do
+          ${{ github.action_path }}/release.sh "${VERSION_CATEGORY}" "${module}"
+        done
